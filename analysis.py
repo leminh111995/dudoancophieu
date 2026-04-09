@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # 1. Tải dữ liệu
-ma_co_phieu = "FPT.VN"
+ma_input = input("Nhập mã cổ phiếu (ví dụ: FPT, VCB, HPG): ")
+ma_co_phieu = ma_input.upper() + ".VN"
 df = yf.download(ma_co_phieu, start="2025-01-01")
 df.columns = df.columns.get_level_values(0)
 
