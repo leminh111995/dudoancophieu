@@ -9,22 +9,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Lay code tu Github
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Cai dat Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: Install dependencies
-        run: pip install yfinance matplotlib pandas
+      - name: Cai dat thu vien # DAY LA BUOC QUAN TRONG
+        run: |
+          pip install vnstock3 pandas numpy matplotlib
 
-      - name: Run analysis
+      - name: Chay file phan tich
         run: python analysis.py
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bieu-do-ket-qua
-          path: ket_qua.png
