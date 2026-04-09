@@ -1,25 +1,25 @@
-name: Tu dong phan tich co phieu
+name: Bo Loc Sieu Co Phieu HOSE
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Đây là nút bấm để bạn chạy "bất cứ khi nào yêu cầu"
   schedule:
-    - cron: '0 2 * * 1-5'
+    - cron: '50 7 * * 1-5' # Tự động chạy lúc 14:50 giờ VN (7:50 UTC) từ Thứ 2 - Thứ 6
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Lay code tu Github
+      - name: Lay code moi nhat
         uses: actions/checkout@v3
 
-      - name: Cai dat Python
+      - name: Thiet lap moi truong Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Cai dat thu vien
+      - name: Cai dat cong cu phan tich
         run: |
-          pip install vnstock pandas numpy matplotlib ipython
+          pip install vnstock pandas numpy ipython
 
-      - name: Chay file phan tich
+      - name: Thuc thi quet da chien thuat
         run: python analysis.py
