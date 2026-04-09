@@ -15,11 +15,11 @@ jobs:
       - name: Cai dat Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' # ĐÃ NÂNG CẤP LÊN 3.10
+          python-version: '3.10'
 
       - name: Cai dat thu vien
         run: |
-          pip install vnstock3 pandas numpy matplotlib
+          pip install vnstock pandas numpy matplotlib ipython
 
       - name: Chay file phan tich
         run: python analysis.py
