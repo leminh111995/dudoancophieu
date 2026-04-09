@@ -4,70 +4,78 @@ import pandas as pd
 # Khởi tạo cổng kết nối
 s = Vnstock()
 
-def tinh_toan():
-    print("--- HỆ THỐNG TRA CỨU DÒNG TIỀN HOSE (Bản nới lỏng bộ lọc) ---")
+def tinh_toan_toan_san():
+    print("🚀 ĐANG QUÉT TOÀN BỘ SÀN HOSE (Khoảng 400 mã)...")
     
-    # Danh sách các mã trụ cột và tiềm năng sàn HOSE
-    tickers = ["FPT", "VCB", "HPG", "VNM", "SSI", "MSN", "TCB", "MWG", "DGC", "STB", 
-               "VPB", "MBB", "VIC", "VRE", "VJC", "GAS", "HDB", "TPB", "VIB", "GVR"]
-    results = []
+    try:
+        # Lấy danh sách toàn sàn và lọc mã HOSE
+        df_all = s.market.listing()
+        df_hose = df_all[df_all['comGroupCode'] == 'HOSE']
+        all_tickers = df_hose['ticker'].tolist()
+        print(f"✅ Tìm thấy {len(all_tickers)} mã trên sàn HOSE.")
+    except:
+        print("❌ Lỗi lấy danh sách sàn. Vui lòng kiểm tra lại kết nối.")
+        return []
 
-    for ticker in tickers:
+    results = []
+    processed_count = 0
+
+    for ticker in all_tickers:
         try:
-            # 1. Lấy dữ liệu giá
-            df = s.stock_price.khop_lenh_history(symbol=ticker, period='1y')
-            if df.empty: continue
+            # 1. Lấy dữ liệu giá để lọc Penny
+            df_price = s.stock_price.khop_lenh_history(symbol=ticker, period='1w')
+            if df_price.empty: continue
             
-            # 2. Lấy dòng tiền Smart Money (Quý)
-            flow = s.stock_finance.foreign_prop_flow(symbol=ticker, period='quarter')
-            f_net_q = flow['foreign'].sum() / 1e9 # Đơn vị: Tỷ đồng
-            p_net_q = flow['prop'].sum() / 1e9    # Đơn vị: Tỷ đồng
+            curr_price = df_price['close'].iloc[-1]
+            if curr_price < 10000: continue # Lọc giá trên 10
             
-            # ĐIỀU KIỆN MỚI: Chỉ cần 1 trong 2 bên mua ròng > 0
-            if f_net_q > 0 or p_net_q > 0:
-                curr_price = df['close'].iloc[-1]
-                ma20 = df['close'].rolling(20).mean().iloc[-1]
-                
-                # Tính RSI
-                delta = df['close'].diff()
+            # 2. Lấy dòng tiền 10 phiên gần nhất
+            flow = s.stock_finance.foreign_prop_flow(symbol=ticker, period='daily')
+            if flow.empty: continue
+            
+            f_net = flow['foreign'].tail(10).sum() / 1e6 # Đơn vị: Triệu đồng
+            p_net = flow['prop'].tail(10).sum() / 1e6
+            
+            # ĐIỀU KIỆN: Ngoại mua HOẶC Tự doanh mua
+            if f_net > 0 or p_net > 0:
+                # Tính RSI để hỗ trợ dự đoán
+                df_rsi = s.stock_price.khop_lenh_history(symbol=ticker, period='1y')
+                delta = df_rsi['close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
                 rsi = 100 - (100 / (1 + (gain / (loss + 1e-9)).iloc[-1]))
 
                 results.append({
-                    'Mã': ticker, 
+                    'Mã': ticker,
                     'Giá': curr_price,
-                    'Ngoại_Q': f_net_q,
-                    'TựDoanh_Q': p_net_q,
-                    'Tổng_SM': f_net_q + p_net_q,
-                    'RSI': round(rsi, 1),
-                    '%_MA20': round(((curr_price - ma20) / ma20) * 100, 1)
+                    'Ngoại_10P(Tr)': round(f_net, 1),
+                    'TD_10P(Tr)': round(p_net, 1),
+                    'Tổng_Mua(Tr)': f_net + p_net,
+                    'RSI': round(rsi, 1)
                 })
-        except: continue
+            
+            processed_count += 1
+            if processed_count % 50 == 0:
+                print(f"--- Đã quét xong {processed_count} mã ---")
+        except:
+            continue
 
-    # Sắp xếp theo tổng tiền Smart Money (Ngoại + Tự doanh) gom nhiều nhất
-    return sorted(results, key=lambda x: x['Tổng_SM'], reverse=True)[:5]
+    # Sắp xếp và lấy 5 mã mạnh nhất
+    return sorted(results, key=lambda x: x['Tổng_Mua(Tr)'], reverse=True)[:5]
 
-# XUẤT BÁO CÁO
-top_5 = tinh_toan()
+# XUẤT KẾT QUẢ
+top_5 = tinh_toan_toan_san()
 
 if top_5:
-    print("\n" + "="*95)
-    print(f"{'MÃ':<6} | {'GIÁ':<7} | {'NGOẠI_Q':<9} | {'TD_Q':<8} | {'RSI':<5} | {'%_MA20':<7} | {'NHẬN ĐỊNH'}")
-    print("-" * 95)
+    print("\n" + "="*85)
+    print(f"{'MÃ':<6} | {'GIÁ':<8} | {'NGOẠI_10P':<10} | {'TD_10P':<10} | {'RSI':<6} | {'DỰ ĐOÁN'}")
+    print("-" * 85)
     for m in top_5:
-        # Logic nhận định thông minh hơn
-        status = "THEO DÕI"
-        if m['Ngoại_Q'] > 0 and m['TựDoanh_Q'] > 0 and m['RSI'] < 65:
-            status = "MUA ĐẸP" # Cả 2 cùng đồng thuận
-        elif m['Ngoại_Q'] > 50 or m['TựDoanh_Q'] > 50:
-            status = "TIỀN VÀO MẠNH" # Một bên gom cực khủng
-            
+        # Nhận định nhanh
+        status = "GOM MẠNH" if m['Ngoại_10P(Tr)'] > 0 and m['TD_10P(Tr)'] > 0 else "TIỀN VÀO"
         if m['RSI'] > 70: status = "QUÁ MUA"
-        if m['Ngoại_Q'] < 0: status = "NGOẠI XẢ"
         
-        print(f"{m['Mã']:<6} | {m['Giá']:<7,.0f} | {m['Ngoại_Q']:>8.1f}B | {m['TựDoanh_Q']:>7.1f}B | {m['RSI']:<5} | {m['%_MA20']:>6}% | {status}")
-    print("="*95)
-    print("\n💡 GỢI Ý: Hãy ưu tiên mã có 'MUA ĐẸP' hoặc '%_MA20' thấp (dưới 3%) để có điểm vào an toàn.")
+        print(f"{m['Mã']:<6} | {m['Giá']:<8,.0f} | {m['Ngoại_10P(Tr)']:>10.1f} | {m['TD_10P(Tr)']:>10.1f} | {m['RSI']:<6} | {status}")
+    print("="*85)
 else:
-    print("\n--- Không tìm thấy mã nào thỏa mãn điều kiện mua ròng hôm nay ---")
+    print("\n--- Không tìm thấy mã nào thỏa mãn điều kiện ---")
