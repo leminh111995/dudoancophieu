@@ -1,31 +1,41 @@
-name: Tu dong phan tich co phieu
+import yfinance as yf
+import matplotlib.pyplot as plt
+import pandas as pd
 
-on:
-  schedule:
-    - cron: '0 2 * * 1-5'
-  workflow_dispatch:
+# Thiết lập mã cổ phiếu
+ma_co_phieu = "FPT.VN" 
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Lay code tu Github
-        uses: actions/checkout@v3
+try:
+    # 1. Tải dữ liệu
+    df = yf.download(ma_co_phieu, start="2025-01-01")
+    df.columns = df.columns.get_level_values(0)
 
-      - name: Cai dat Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
+    # 2. Tính toán chỉ số
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['STD'] = df['Close'].rolling(window=20).std()
+    df['BOL_UP'] = df['MA20'] + (df['STD'] * 2)
+    df['BOL_DOWN'] = df['MA20'] - (df['STD'] * 2)
 
-      - name: Cai dat thu vien
-        run: |
-          pip install yfinance matplotlib pandas
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
 
-      - name: Chay file phan tich
-        run: python analysis.py
+    df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = df['EMA12'] - df['EMA26']
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
 
-      - name: Luu bieu do vao kho
-        uses: actions/upload-artifact@v4
-        with:
-          name: bieu-do-ket-qua
-          path: ket_qua.png
+    # 3. In kết quả và lưu ảnh
+    print(f"--- Ket qua cho {ma_co_phieu} ---")
+    print(f"Gia: {float(df['Close'].iloc[-1]):,.0f}")
+    print(f"RSI: {float(df['RSI'].iloc[-1]):.2f}")
+    
+    plt.figure(figsize=(10,6))
+    plt.plot(df['Close'], label='Price')
+    plt.plot(df['MA20'], label='MA20')
+    plt.savefig('ket_qua.png')
+    print("✅ Thanh cong!")
+except Exception as e:
+    print(f"❌ Loi: {e}")
