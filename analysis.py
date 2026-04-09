@@ -1,16 +1,15 @@
-from vnstock import *
+# Khai báo đích danh các hàm cần dùng từ thư viện vnstock
+from vnstock import stock_listing, financial_flow, financial_ratio, stock_historical_data
 import pandas as pd
 import numpy as np
 
 def tinh_toan_chi_so():
     print("--- ĐANG QUÉT CHUYÊN SÂU SÀN HOSE (Dòng tiền + Cơ bản + Biến động) ---")
     
-    # 1. Lấy danh sách mã (Cập nhật hàm mới: stock_listing)
+    # 1. Lấy danh sách toàn bộ mã sàn HOSE
     try:
-        # Thử hàm stock_listing nếu listing_companies không tồn tại
         df_ls = stock_listing() 
-        
-        # Lọc sàn HOSE
+        # Lọc các mã trên sàn HOSE
         df_hose = df_ls[df_ls['comGroupCode'] == 'HOSE']
         tickers = df_hose['ticker'].tolist()
     except Exception as e:
@@ -27,22 +26,24 @@ def tinh_toan_chi_so():
             if df.empty: continue
             
             current_price = df['close'].iloc[-1]
-            if current_price < 10000: continue 
+            if current_price < 10000: continue # Bỏ mã dưới 10k
             
-            # Tính biến động 1 tuần
+            # Tính biến động 1 tuần (5 phiên)
             price_1w_ago = df['close'].iloc[-6] if len(df) > 6 else df['close'].iloc[0]
             pct_change_1w = ((current_price - price_1w_ago) / price_1w_ago) * 100
             
-            # 3. Lấy Dòng tiền (Sử dụng hàm financial_flow bản mới nhất)
+            # 3. Lấy Dòng tiền Smart Money (Quý)
+            # Hàm này cung cấp dữ liệu Nước ngoài & Tự doanh
             flow = financial_flow(symbol=ticker, report_type='net_flow', report_range='quarterly')
             
-            # Tính tổng mua ròng quý
-            f_net_q = flow['foreign'].sum()
-            p_net_q = flow['prop'].sum()
+            f_net_q = flow['foreign'].sum() # Tổng ngoại mua ròng quý
+            p_net_q = flow['prop'].sum()    # Tổng tự doanh mua ròng quý
+            
+            # Tốc độ dòng tiền 5 phiên gần nhất
             f_net_5d = flow['foreign'].tail(5).sum()
             p_net_5d = flow['prop'].tail(5).sum()
             
-            # Lọc: Chỉ lấy mã Ngoại & Tự doanh mua ròng trong quý
+            # Lọc: Cả 2 cùng mua ròng trong quý (> 0)
             if f_net_q > 0 and p_net_q > 0:
                 # 4. Lấy chỉ số P/E
                 try:
@@ -51,25 +52,27 @@ def tinh_toan_chi_so():
                 except:
                     pe = 0
                 
-                # Tính RSI
+                # Tính RSI (Chỉ báo xung lực)
                 delta = df['close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / (loss + 1e-9) # Tránh chia cho 0
+                rs = gain / (loss + 1e-9)
                 rsi = 100 - (100 / (1 + rs.iloc[-1]))
                 
                 results.append({
                     'Mã': ticker, 'Giá': current_price,
-                    'SM_QUÝ': (f_net_q + p_net_q) / 1e9,
-                    'TỐCĐỘ_5P': (f_net_5d + p_net_5d) / 1e9,
+                    'SM_QUÝ(B)': (f_net_q + p_net_q) / 1e9,
+                    'TỐCĐỘ_5P(B)': (f_net_5d + p_net_5d) / 1e9,
                     'P/E': pe, '1W_%': pct_change_1w,
                     'RSI': round(rsi, 2)
                 })
         except:
             continue
             
-    return sorted(results, key=lambda x: x['SM_QUÝ'], reverse=True)[:5]
+    # Sắp xếp theo lực mua ròng và lấy Top 5
+    return sorted(results, key=lambda x: x['SM_QUÝ(B)'], reverse=True)[:5]
 
+# CHẠY VÀ XUẤT BÁO CÁO
 final_list = tinh_toan_chi_so()
 
 if final_list:
@@ -78,9 +81,9 @@ if final_list:
     print("-" * 95)
     for m in final_list:
         note = "THEO DÕI"
-        if m['TỐCĐỘ_5P'] > 0 and m['1W_%'] < 5 and m['RSI'] < 65: note = "MUA ĐẸP"
+        if m['TỐCĐỘ_5P(B)'] > 0 and m['1W_%'] < 5 and m['RSI'] < 65: note = "MUA ĐẸP"
         elif m['1W_%'] > 10: note = "QUÁ CAO"
-        print(f"{m['Mã']:<6} | {m['Giá']:<7,.0f} | {m['SM_QUÝ']:<10.2f} | {m['TỐCĐỘ_5P']:<9.2f} | {m['P/E']:<6.1f} | {m['1W_%']:>6.1f}% | {m['RSI']:<5} | {note}")
+        print(f"{m['Mã']:<6} | {m['Giá']:<7,.0f} | {m['SM_QUÝ(B)']:<10.2f} | {m['TỐCĐỘ_5P(B)']:<9.2f} | {m['P/E']:<6.1f} | {m['1W_%']:>6.1f}% | {m['RSI']:<5} | {note}")
     print("="*95)
 else:
     print("Không tìm thấy mã đạt tiêu chuẩn hôm nay.")
