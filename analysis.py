@@ -5,10 +5,12 @@ import numpy as np
 def tinh_toan_chi_so():
     print("--- ĐANG QUÉT CHUYÊN SÂU SÀN HOSE (Dòng tiền + Cơ bản + Biến động) ---")
     
-    # 1. Lấy danh sách toàn bộ mã (Dùng hàm trực tiếp của bản mới)
+    # 1. Lấy danh sách mã (Cập nhật hàm mới: stock_listing)
     try:
-        df_ls = listing_companies()
-        # Lọc sàn HOSE (Trong bản mới cột sàn thường là 'comGroupCode' hoặc 'exchange')
+        # Thử hàm stock_listing nếu listing_companies không tồn tại
+        df_ls = stock_listing() 
+        
+        # Lọc sàn HOSE
         df_hose = df_ls[df_ls['comGroupCode'] == 'HOSE']
         tickers = df_hose['ticker'].tolist()
     except Exception as e:
@@ -25,25 +27,22 @@ def tinh_toan_chi_so():
             if df.empty: continue
             
             current_price = df['close'].iloc[-1]
-            if current_price < 10000: continue # Bỏ mã dưới 10k
+            if current_price < 10000: continue 
             
             # Tính biến động 1 tuần
             price_1w_ago = df['close'].iloc[-6] if len(df) > 6 else df['close'].iloc[0]
             pct_change_1w = ((current_price - price_1w_ago) / price_1w_ago) * 100
             
-            # 3. Lấy Dòng tiền Smart Money (Nước ngoài & Tự doanh)
-            # Hàm mới: financial_flow
+            # 3. Lấy Dòng tiền (Sử dụng hàm financial_flow bản mới nhất)
             flow = financial_flow(symbol=ticker, report_type='net_flow', report_range='quarterly')
             
-            # Tính tổng mua ròng quý (3 tháng gần nhất)
+            # Tính tổng mua ròng quý
             f_net_q = flow['foreign'].sum()
             p_net_q = flow['prop'].sum()
-            
-            # Tốc độ dòng tiền (5 phiên gần nhất)
             f_net_5d = flow['foreign'].tail(5).sum()
             p_net_5d = flow['prop'].tail(5).sum()
             
-            # Lọc: Cả 2 cùng mua ròng trong quý
+            # Lọc: Chỉ lấy mã Ngoại & Tự doanh mua ròng trong quý
             if f_net_q > 0 and p_net_q > 0:
                 # 4. Lấy chỉ số P/E
                 try:
@@ -52,11 +51,11 @@ def tinh_toan_chi_so():
                 except:
                     pe = 0
                 
-                # Tính RSI đơn giản
+                # Tính RSI
                 delta = df['close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
+                rs = gain / (loss + 1e-9) # Tránh chia cho 0
                 rsi = 100 - (100 / (1 + rs.iloc[-1]))
                 
                 results.append({
@@ -69,10 +68,8 @@ def tinh_toan_chi_so():
         except:
             continue
             
-    # Sắp xếp theo lực mua ròng và lấy Top 5
     return sorted(results, key=lambda x: x['SM_QUÝ'], reverse=True)[:5]
 
-# CHẠY VÀ XUẤT BÁO CÁO
 final_list = tinh_toan_chi_so()
 
 if final_list:
