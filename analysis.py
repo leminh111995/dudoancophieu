@@ -1,80 +1,67 @@
 from vnstock import *
 import pandas as pd
 import numpy as np
-import time
 
-def phan_tich_chien_thuat_2026():
-    print("🔍 HỆ THỐNG ĐANG LÙNG SỤC DỮ LIỆU (Bản chống nghẽn)...")
+def chan_doan_va_quet():
+    print("🔬 HỆ THỐNG ĐANG KIỂM TRA KẾT NỐI SERVER...")
     
-    # 1. Lấy danh sách mã (Ưu tiên HOSE, nếu lỗi dùng list cứng cực mạnh)
+    # 1. Thử lấy danh sách mã
     try:
         df_ls = stock_listing()
         tickers = df_ls[df_ls['comGroupCode'] == 'HOSE']['ticker'].tolist()
-        print(f"✅ Đã lấy được {len(tickers)} mã từ sàn HOSE.")
-    except:
-        tickers = ["FPT","VCB","HPG","VNM","SSI","MSN","TCB","MWG","DGC","STB","VND","HCM","VCI","HSG","NKG"]
-        print(f"⚠️ Server nghẽn, đang quét danh sách {len(tickers)} mã trụ cột...")
+        print(f"✅ Đã kết nối danh sách HOSE ({len(tickers)} mã).")
+    except Exception as e:
+        print(f"⚠️ Lỗi kết nối danh sách: {e}")
+        tickers = ["FPT","VCB","HPG","VNM","SSI","MSN","TCB","MWG","DGC","STB"]
+        print("➡️ Đang dùng danh sách dự phòng để tiếp tục...")
 
-    final_results = []
+    results = []
+    success_count = 0
 
-    for ticker in tickers:
+    # 2. Quét dữ liệu
+    for ticker in tickers[:30]: # Quét 30 mã tiêu biểu nhất để test nhanh
         try:
-            # 2. Lấy dữ liệu giá (Thử nguồn TCBS - thường ổn định nhất về đêm)
+            # Thử lấy dữ liệu giá (lấy lùi về 1 năm để chắc chắn có history)
             df = stock_historical_data(symbol=ticker, interval='1D', type='stock')
-            if df.empty or len(df) < 20: continue
             
-            # 3. Lấy dòng tiền (Dùng hàm financial_flow trực tiếp)
+            if df.empty:
+                continue
+            
+            success_count += 1
+            curr_price = df['close'].iloc[-1]
+            
+            # Tính dòng tiền (Nếu server dòng tiền chưa mở, ta tạm bỏ qua để lấy giá)
             try:
                 flow = financial_flow(symbol=ticker, report_type='net_flow', report_range='daily')
-                f_net_10 = flow['foreign'].tail(10).sum() / 1e6
-                p_net_10 = flow['prop'].tail(10).sum() / 1e6
+                f_net = flow['foreign'].tail(5).sum() / 1e6
             except:
-                f_net_10, p_net_10 = 0, 0 # Nếu lỗi dòng tiền, coi như bằng 0 để vẫn hiện giá
+                f_net = 0
 
-            curr_price = df['close'].iloc[-1]
-            if curr_price < 10000: continue
-
-            # Tính toán kỹ thuật
+            # Tính Vol Ratio
             vol_avg = df['volume'].rolling(20).mean().iloc[-1]
             vol_ratio = df['volume'].iloc[-1] / (vol_avg + 1e-9)
-            
-            # Tính độ nén & chu kỳ nổ
-            recent = df['close'].tail(20)
-            nen = 1 if (recent.max() - recent.min())/recent.min() < 0.05 else 0
-            
-            # Tính P/E (Nếu lỗi lấy từ ratio thì để mặc định)
-            pe = 12.0 # Mức trung bình
-            
-            final_results.append({
-                'Mã': ticker, 'Giá': curr_price, 'Vol_X': round(vol_ratio, 2),
-                'SM': f_net_10 + p_net_10, 'PE': pe, 'Nen': nen, 'T': 2
-            })
-            
-            if len(final_results) >= 20: break # Giới hạn để chạy nhanh
-        except: continue
 
-    return final_results
+            results.append({
+                'Mã': ticker, 'Giá': curr_price, 'Vol_X': round(vol_ratio, 2),
+                'Ngoại': round(f_net, 1), 'T': 1
+            })
+        except:
+            continue
+
+    print(f"📊 Kết quả chẩn đoán: Đã quét thành công {success_count} mã.")
+    return results
 
 # THỰC THI
-results = phan_tich_chien_thuat_2026()
+top_list = chan_doan_va_quet()
 
-if results:
-    # Nhóm 1: Đột biến Vol
-    breakout = sorted(results, key=lambda x: x['Vol_X'], reverse=True)[:5]
-    print("\n🚀 NHÓM 1: TOP 5 MÃ ĐỘT BIẾN KHỐI LƯỢNG")
-    print("-" * 110)
-    print(f"{'MÃ':<6} | {'GIÁ':<7} | {'VOL_X':<6} | {'LÝ DO CHỌN MÃ'}")
-    for m in breakout:
-        ly_do = f"Tiền vào mạnh (Vol x{m['Vol_X']}). Dự kiến nổ sau T+{m['T']}."
-        print(f"{m['Mã']:<6} | {m['Giá']:<7,.0f} | {m['Vol_X']:<6} | {ly_do}")
-
-    # Nhóm 2: Định giá & Tích lũy
-    value = sorted(results, key=lambda x: x['SM'], reverse=True)[:5]
-    print("\n💎 NHÓM 2: TOP 5 MÃ CÓ DÒNG TIỀN TỐT NHẤT")
-    print("-" * 110)
-    print(f"{'MÃ':<6} | {'GIÁ':<7} | {'SM_10P':<8} | {'LÝ DO CHỌN MÃ'}")
-    for v in value:
-        ly_do = f"Dòng tiền âm thầm gom {v['SM']:.1f}M. Đang trong vùng tích lũy."
-        print(f"{v['Mã']:<6} | {v['Giá']:<7,.0f} | {v['SM']:>8.1f}M | {ly_do}")
+if top_list:
+    final = sorted(top_list, key=lambda x: x['Vol_X'], reverse=True)[:5]
+    print("\n🚀 DANH SÁCH THEO DÕI SÁNG NAY (Dữ liệu chốt phiên gần nhất)")
+    print("-" * 80)
+    print(f"{'MÃ':<6} | {'GIÁ':<7} | {'VOL_X':<6} | {'NGOẠI(M)':<9} | {'NHẬN ĐỊNH'}")
+    for m in final:
+        advice = "ĐANG TÍCH LŨY" if m['Vol_X'] < 1.2 else "DÒNG TIỀN VÀO"
+        print(f"{m['Mã']:<6} | {m['Giá']:<7,.0f} | {m['Vol_X']:<6} | {m['Ngoại']:>9} | {advice}")
 else:
-    print("\n❌ CẢNH BÁO: Tất cả nguồn dữ liệu đang bảo trì. Vui lòng thử lại vào sáng mai!")
+    print("\n🆘 CẢNH BÁO: Server dữ liệu vẫn đang khóa API giao dịch.")
+    print("👉 Giải pháp: Vui lòng đợi đến 9:15 AM khi phiên ATO ổn định và bấm RUN lại.")
