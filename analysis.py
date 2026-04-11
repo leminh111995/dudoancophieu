@@ -1,67 +1,144 @@
+import streamlit as st
 from vnstock import *
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+import yfinance as yf
 
-def phan_tich_cuoi_cung():
-    # 1. Xác định thời gian (Chuyển về giờ Việt Nam nếu chạy trên server quốc tế)
-    now_hour = (datetime.now().hour + 7) % 24 
-    print(f"🕒 Giờ hệ thống (VN): {now_hour}h")
-    
-    print("🚀 ĐANG TRUY XUẤT DỮ LIỆU TOÀN SÀN HOSE...")
+# ==========================================
+# 1. HỆ THỐNG BẢO MẬT (PASSWORD)
+# ==========================================
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
 
-    # 2. Lấy danh sách mã (Dùng lệnh trực tiếp, không qua object s)
-    try:
-        df_ls = stock_listing()
-        df_hose = df_ls[df_ls['comGroupCode'] == 'HOSE']
-        tickers = df_hose['ticker'].tolist()
-        print(f"✅ Kết nối thành công. Tìm thấy {len(tickers)} mã trên HOSE.")
-    except:
-        tickers = ["FPT","VCB","HPG","VNM","SSI","MSN","TCB","MWG","DGC","STB","VND","HCM","VCI","HSG","NKG"]
-        print("⚠️ Server bận, đang dùng danh sách 15 mã trụ cột...")
+    if "password_correct" not in st.session_state:
+        st.text_input("Vui lòng nhập mật mã của Minh:", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Sai mật mã! Nhập lại:", type="password", on_change=password_entered, key="password")
+        st.error("😕 Mật mã không đúng.")
+        return False
+    else:
+        return True
 
-    results = []
-    
-    # 3. Quét dữ liệu (Giới hạn 100 mã để tránh quá tải server buổi sáng)
-    for ticker in tickers[:100]:
+# ==========================================
+# 2. KHỞI CHẠY ỨNG DỤNG CHÍNH
+# ==========================================
+if check_password():
+    st.set_page_config(page_title="Robot Phân Tích 24/7", layout="wide")
+    st.title("🛡️ Hệ Thống Chẩn Đoán Siêu Cổ Phiếu")
+
+    # --- HÀM TÍNH TOÁN CHỈ BÁO KỸ THUẬT ---
+    def tinh_toan_ky_thuat(df):
+        # Bollinger Bands
+        df['MA20'] = df['close'].rolling(20).mean()
+        df['STD'] = df['close'].rolling(20).std()
+        df['Upper'] = df['MA20'] + (df['STD'] * 2)
+        df['Lower'] = df['MA20'] - (df['STD'] * 2)
+        
+        # RSI (14)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        df['RSI'] = 100 - (100 / (1 + gain/(loss + 1e-9)))
+        
+        # MACD (12, 26, 9)
+        exp1 = df['close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        return df
+
+    # --- HÀM LẤY DỮ LIỆU ĐA NGUỒN (CHỐNG LỖI) ---
+    def lay_du_lieu_thong_minh(ticker):
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        
+        # Thử cách 1: Vnstock Direct
         try:
-            # Lấy giá 1 năm
-            df = stock_historical_data(symbol=ticker, interval='1D', type='stock')
-            if df.empty: continue
-            
-            curr_price = df['close'].iloc[-1]
-            if curr_price < 10000: continue
-            
-            # Tính Vol Ratio (So với trung bình 20 phiên)
-            vol_avg = df['volume'].tail(20).mean()
-            v_ratio = df['volume'].iloc[-1] / (vol_avg + 1e-9)
-            
-            # Tính dòng tiền (Smart Money)
-            try:
-                flow = financial_flow(symbol=ticker, report_type='net_flow', report_range='daily')
-                sm = flow['foreign'].tail(5).sum() + flow['prop'].tail(5).sum()
-            except: sm = 0
-            
-            results.append({
-                'Mã': ticker, 'Giá': curr_price, 'Vol_X': round(v_ratio, 2),
-                'SM': round(sm/1e6, 1), 'T': 2
-            })
-        except: continue
-    
-    return results
+            df = stock_historical_data(symbol=ticker, start_date=start_date, end_date=end_date, resolution='1D', type='stock')
+            if df is not None and not df.empty: return df
+        except: pass
+        
+        # Thử cách 2: Yfinance (Dữ liệu quốc tế cực ổn định)
+        try:
+            yt = yf.download(f"{ticker}.VN", period="1y", progress=False)
+            # Chuẩn hóa tên cột của yfinance về dạng vnstock
+            yt.columns = [col[0].lower() if isinstance(col, tuple) else col.lower() for col in yt.columns]
+            yt = yt.reset_index().rename(columns={'date': 'date'})
+            return yt
+        except: return None
 
-# THỰC THI
-data = phan_tich_cuoi_cung()
+    # --- DANH SÁCH MÃ ---
+    @st.cache_data(ttl=3600)
+    def get_all_tickers():
+        try:
+            df_ls = stock_listing()
+            return df_ls[df_ls['comGroupCode'] == 'HOSE']['ticker'].tolist()
+        except:
+            return ["FPT","HPG","SSI","TCB","MWG","VNM","VIC","VHM","STB","MSN","DGC","VND","HCM","VCI","HSG"]
 
-if data:
-    brk = sorted(data, key=lambda x: x['Vol_X'], reverse=True)[:5]
-    print("\n📊 BẢNG PHÂN TÍCH CHIẾN THUẬT")
-    print("-" * 100)
-    print(f"{'MÃ':<6} | {'GIÁ':<7} | {'VOL_X':<6} | {'SM_5P(M)':<8} | {'DỰ BÁO'}")
-    for m in brk:
-        status = "BÙNG NỔ" if m['Vol_X'] > 1.3 else "TÍCH LŨY"
-        print(f"{m['Mã']:<6} | {m['Giá']:<7,.0f} | {m['Vol_X']:<6} | {m['SM']:>8} | {status} T+{m['T']}")
-else:
-    print("\n❌ HIỆN TẠI KHÔNG CÓ DỮ LIỆU.")
-    print("👉 Lý do: Server TCBS/SSI đang bảo trì cuối ngày (18h-21h).")
-    print("👉 Hành động: Hãy bấm RUN lại sau 21h đêm nay hoặc 9h15 sáng mai.")
+    all_tickers = get_all_tickers()
+
+    # --- GIAO DIỆN BÊN TRÁI (SIDEBAR) ---
+    st.sidebar.header("🎯 Danh mục theo dõi")
+    selected_ticker = st.sidebar.selectbox("Chọn mã muốn soi:", all_tickers, index=0)
+    st.sidebar.divider()
+    st.sidebar.info("Hệ thống tự động dùng dữ liệu dự phòng nếu server chính bảo trì.")
+
+    # --- NÚT BẤM VÀ HIỂN THỊ ---
+    if st.button(f'🚀 BẮT ĐẦU CHẨN ĐOÁN MÃ {selected_ticker}'):
+        with st.spinner(f'Đang phân tích sâu {selected_ticker}...'):
+            raw_data = lay_du_lieu_thong_minh(selected_ticker)
+            
+            if raw_data is not None and not raw_data.empty:
+                df = tinh_toan_ky_thuat(raw_data)
+                last_row = df.iloc[-1]
+                
+                # 1. Hiển thị các chỉ số chính
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("Giá Hiện Tại", f"{last_row['close']:,.0f}")
+                    st.write(f"**RSI (14):** {round(last_row['RSI'], 1)}")
+                with c2:
+                    st.write("**Bollinger Bands**")
+                    st.write(f"Upper: {last_row['Upper']:,.0f}")
+                    st.write(f"Lower: {last_row['Lower']:,.0f}")
+                with c3:
+                    macd_status = "TĂNG" if last_row['MACD'] > last_row['Signal'] else "GIẢM"
+                    st.write(f"**MACD:** {macd_status}")
+                    st.write(f"Tín hiệu: {round(last_row['MACD'], 2)}")
+                
+                st.divider()
+                
+                # 2. Nhận định thông minh
+                st.write("### 🧠 Nhận định từ Robot:")
+                score = 0
+                if 30 < last_row['RSI'] < 68: score += 1
+                if last_row['MACD'] > last_row['Signal']: score += 1
+                if last_row['close'] < last_row['Upper']: score += 1
+                
+                if score == 3:
+                    st.balloons()
+                    st.success(f"🌟 **MUA TÍCH LŨY**: {selected_ticker} hội tụ đủ điều kiện bùng nổ. Có thể gom quanh vùng giá này.")
+                elif score == 2:
+                    st.info(f"⚖️ **THEO DÕI**: {selected_ticker} đang ở trạng thái ổn định. Cần quan sát thêm khối lượng (Volume) ở phiên tới.")
+                else:
+                    st.warning(f"⚠️ **TẠM ĐỨNG NGOÀI**: Xung lực của {selected_ticker} đang yếu hoặc giá đã chạm vùng cản trên.")
+                
+                # 3. Vẽ biểu đồ biến động
+                st.write(f"### 📈 Biểu đồ giá {selected_ticker} (3 tháng gần nhất)")
+                chart_data = df.tail(60).set_index('date')['close']
+                st.line_chart(chart_data)
+                
+            else:
+                st.error("Không thể kết nối nguồn dữ liệu. Hãy kiểm tra lại mã cổ phiếu!")
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"Cập nhật lúc: {datetime.now().strftime('%H:%M:%S')}")
